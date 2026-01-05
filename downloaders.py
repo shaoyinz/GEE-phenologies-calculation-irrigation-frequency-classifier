@@ -134,17 +134,36 @@ class Sentinel2Downloader(BaseGEEDownloader):
             cire = image.expression('(NIR / RedEdge1) - 1', {'NIR': image.select('B8'), 'RedEdge1': image.select('B5')}).rename('cire')
             return image.addBands([ndvi, gcvi, ndmi, cire])
             
-        # ... Include Cloud Masking Logic ...
-        # Simplified for brevity; paste full cloud_mask_s2 function here if needed
+        # Cloud masking using SCL band (Scene Classification Layer)
+        def cloud_mask_s2(image):
+            """Masks clouds and cloud shadows using the SCL band."""
+            scl = image.select('SCL')
+            # SCL values: 3=cloud shadows, 8=cloud medium probability, 9=cloud high probability, 10=thin cirrus
+            mask = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10))
+            return image.updateMask(mask)
         
-        processed = collection.map(mask_edges).map(add_indices)
+        processed = collection.map(mask_edges).map(add_indices).map(cloud_mask_s2)
         
         # Mosaic by date logic
         def mosaic_by_date(col):
-            # ... implementation from original script ...
-            # For brevity, returning the collection as is, but you should insert
-            # the mosaic logic here.
-            return col 
+            unique_dates = col.aggregate_array('system:time_start').map(
+                lambda time_start: ee.Date(time_start).format('YYYY-MM-dd')
+            ).distinct()
+
+            def create_daily_mosaic(date_str):
+                date = ee.Date(date_str)
+                daily_collection = col.filterDate(date, date.advance(1, 'day'))
+
+                # For multiple images on same day, use mosaic (takes first valid pixel)
+                # This automatically handles overlap between tiles
+                mosaic = daily_collection.mosaic()
+
+                return mosaic.set('system:time_start', date.millis())
+
+            daily_mosaics = ee.ImageCollection.fromImages(
+                unique_dates.map(create_daily_mosaic)
+            )
+            return daily_mosaics
 
         return mosaic_by_date(processed)
 
@@ -176,12 +195,43 @@ class LandsatThermalDownloader(BaseGEEDownloader):
         def apply_scale(image):
             thermal = image.select('ST_B10').multiply(0.00341802).add(149.0)
             return image.addBands(thermal.rename('ST_B10_K'), overwrite=True)
-        
-        # ... Insert QA Masking logic here ...
 
-        processed = collection.map(apply_scale)
-        # Insert Mosaic Logic
-        return processed
+        def qa_mask(image):
+            """Masks clouds, cloud shadows, and snow using QA_PIXEL band."""
+            qa = image.select('QA_PIXEL')
+            # Bit 3: Cloud
+            # Bit 4: Cloud Shadow
+            # Bit 5: Snow
+            # Create mask where these bits are NOT set (0)
+            cloud_mask = qa.bitwiseAnd(1 << 3).eq(0)
+            shadow_mask = qa.bitwiseAnd(1 << 4).eq(0)
+            snow_mask = qa.bitwiseAnd(1 << 5).eq(0)
+            mask = cloud_mask.And(shadow_mask).And(snow_mask)
+            return image.updateMask(mask)
+
+        processed = collection.map(apply_scale).map(qa_mask)
+
+        # Mosaic by date logic
+        def mosaic_by_date(col):
+            unique_dates = col.aggregate_array('system:time_start').map(
+                lambda time_start: ee.Date(time_start).format('YYYY-MM-dd')
+            ).distinct()
+
+            def create_daily_mosaic(date_str):
+                date = ee.Date(date_str)
+                daily_collection = col.filterDate(date, date.advance(1, 'day'))
+
+                # For multiple images on same day, use mosaic (takes first valid pixel)
+                mosaic = daily_collection.mosaic()
+
+                return mosaic.set('system:time_start', date.millis())
+
+            daily_mosaics = ee.ImageCollection.fromImages(
+                unique_dates.map(create_daily_mosaic)
+            )
+            return daily_mosaics
+
+        return mosaic_by_date(processed)
 
     def compute_stats(self, image, geometry):
         stats = image.select(['ST_B10_K']).reduceRegion(
