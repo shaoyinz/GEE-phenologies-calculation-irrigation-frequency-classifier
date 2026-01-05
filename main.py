@@ -41,9 +41,9 @@ PLOTS_FILE_THERMAL = DATA_DIR / "analysis_plots_thermal.pdf"
 # Cleaning Parameters
 # Biologically/Physically valid ranges for filtering
 SENSOR_THRESHOLDS_S2 = {
-    'ndvi': {'min': -0.2, 'max': 1.0},
+    'ndvi': {'min': -0.2, 'max': 0.99},
     'gcvi': {'min': -1.0, 'max': 10.0},
-    'ndmi': {'min': -1.0, 'max': 1.0},
+    'ndmi': {'min': -1.0, 'max': 0.99},
     'cire': {'min': -1.0, 'max': 10.0}
 }
 
