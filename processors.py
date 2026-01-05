@@ -19,28 +19,28 @@ class TimeSeriesProcessor:
         """
         print("Running Sensor Error Detection...")
         df_clean = df.copy()
-        
-        # Create a mask initialized to True (Keep all)
-        mask = pd.Series(True, index=df_clean.index)
 
+        # For each thresholded column, set invalid values to NaN
+        # (previous behavior dropped entire rows if any column failed).
         for col, rules in thresholds.items():
             if col not in df_clean.columns:
                 continue
-            
+
             # Ensure numeric
             col_vals = pd.to_numeric(df_clean[col], errors='coerce')
-            
-            # Update mask based on min/max
-            if 'min' in rules:
-                mask &= (col_vals >= rules['min'])
-            if 'max' in rules:
-                mask &= (col_vals <= rules['max'])
-            
-            # Must not be NaN for the columns we are thresholding
-            mask &= col_vals.notna()
 
-        # Return only valid rows
-        return df_clean[mask].reset_index(drop=True)
+            # Build validity mask for this column
+            valid = pd.Series(True, index=df_clean.index)
+            if 'min' in rules:
+                valid &= (col_vals >= rules['min'])
+            if 'max' in rules:
+                valid &= (col_vals <= rules['max'])
+            valid &= col_vals.notna()
+
+            # Set invalid entries for this column to NaN, preserving other columns
+            df_clean.loc[~valid, col] = np.nan
+
+        return df_clean.reset_index(drop=True)
 
     def _detect_abrupt_changes(self, df, threshold=0.3):
         """Internal method: Spike/Drop detection on a single sorted partition."""
